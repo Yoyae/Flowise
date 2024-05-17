@@ -84,9 +84,6 @@ class SwitchCaseFunction_Utilities implements INode {
         isAnthropicMaxime = variable.value;
       }
     });
-    
-    console.log(isGPT);
-    console.log(isAnthropicMaxime);
 
     if(isGPT === '1'){
       return modelA;
@@ -95,110 +92,6 @@ class SwitchCaseFunction_Utilities implements INode {
     }else {
       return modelC;
     }
-
-/*
-    [
-      flowise:dev:   Variable {
-      flowise:dev:     id: 'f72f3c4b-fb83-4210-8c5b-820d9cf9f1f8',
-      flowise:dev:     name: 'test',
-      flowise:dev:     value: '"ABC"',
-      flowise:dev:     type: 'static',
-      flowise:dev:     createdDate: 2024-04-03T10:26:18.000Z,
-      flowise:dev:     updatedDate: 2024-04-03T11:59:47.000Z
-      flowise:dev:   }
-      flowise:dev: ]
-    const switchVariable = nodeData.inputs?.switchVariable as string;
-    const caseFunctions = nodeData.inputs?.caseFunctions as Array<{ 
-      caseValue: string;
-      caseFunction: string;
-    }>;
-    const defaultFunction = nodeData.inputs?.defaultFunction as string;
-    const functionInputVariablesRaw = nodeData.inputs?.functionInputVariables;
-    const appDataSource = options.appDataSource as DataSource;
-    const databaseEntities = options.databaseEntities as IDatabaseEntity;
-
-    const variables = await getVars(appDataSource, databaseEntities, nodeData);
-    const flow = {
-      chatflowId: options.chatflowid,
-      sessionId: options.sessionId,
-      chatId: options.chatId,
-      input,
-    };
-
-    let inputVars: ICommonObject = {};
-    if (functionInputVariablesRaw) {
-      try {
-        inputVars =
-          typeof functionInputVariablesRaw === "object"
-            ? functionInputVariablesRaw
-            : JSON.parse(functionInputVariablesRaw);
-      } catch (exception) {
-        throw new Error(
-          "Invalid JSON in the Switch Case's Input Variables: " + exception,
-        );
-      }
-    }
-
-    // Some values might be a stringified JSON, parse it
-    for (const key in inputVars) {
-      let value = inputVars[key];
-      if (typeof value === "string") {
-        value = handleEscapeCharacters(value, true);
-        if (value.startsWith("{") && value.endsWith("}")) {
-          try {
-            value = JSON.parse(value);
-          } catch (e) {
-            // ignore
-          }
-        }
-        inputVars[key] = value;
-      }
-    }
-
-    let sandbox: any = { $input: input };
-    sandbox["$vars"] = prepareSandboxVars(variables);
-    sandbox["$flow"] = flow;
-
-    if (Object.keys(inputVars).length) {
-      for (const item in inputVars) {
-        sandbox[`$${item}`] = inputVars[item];
-      }
-    }
-
-    const builtinDeps = process.env.TOOL_FUNCTION_BUILTIN_DEP
-      ? defaultAllowBuiltInDep.concat(
-          process.env.TOOL_FUNCTION_BUILTIN_DEP.split(","),
-        )
-      : defaultAllowBuiltInDep;
-    const externalDeps = process.env.TOOL_FUNCTION_EXTERNAL_DEP
-      ? process.env.TOOL_FUNCTION_EXTERNAL_DEP.split(",")
-      : [];
-    const deps = availableDependencies.concat(externalDeps);
-
-    const nodeVMOptions = {
-      console: "inherit",
-      sandbox,
-      require: {
-        external: { modules: deps },
-        builtin: builtinDeps,
-      },
-    } as any;
-
-    const vm = new NodeVM(nodeVMOptions);
-    try {
-      const defaultResponse = await vm.run(
-        `module.exports = async function() {${defaultFunction}}()`,
-        __dirname,
-      );
-      return {
-        output:
-          typeof defaultResponse === "string"
-            ? handleEscapeCharacters(defaultResponse, false)
-            : defaultResponse,
-      };
-    } catch (e) {
-      throw new Error(e);
-    }*/
   }
 }
 
