@@ -1,38 +1,46 @@
 import PropTypes from 'prop-types'
-import { Handle, Position, useUpdateNodeInternals } from 'reactflow'
-import { useEffect, useRef, useState, useContext } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { useSelector } from 'react-redux'
+import { Handle, Position, useUpdateNodeInternals } from 'reactflow'
 
 // material-ui
-import { useTheme, styled } from '@mui/material/styles'
-import { Box, Typography, Tooltip, IconButton, Button } from '@mui/material'
+import { Tabs } from '@mui/base/Tabs'
 import IconAutoFixHigh from '@mui/icons-material/AutoFixHigh'
+import { Box, Button, IconButton, Popper, TextField, Tooltip, Typography } from '@mui/material'
+import Autocomplete, { autocompleteClasses } from '@mui/material/Autocomplete'
+import { styled, useTheme } from '@mui/material/styles'
 import { tooltipClasses } from '@mui/material/Tooltip'
-import { IconArrowsMaximize, IconEdit, IconAlertTriangle } from '@tabler/icons-react'
+import { useGridApiContext } from '@mui/x-data-grid'
+import { IconAlertTriangle, IconArrowsMaximize, IconBulb, IconEdit, IconRefresh } from '@tabler/icons-react'
 
 // project import
+import { flowContext } from '@/store/context/ReactFlowContext'
+import ConditionDialog from '@/ui-component/dialog/ConditionDialog'
+import ExpandTextDialog from '@/ui-component/dialog/ExpandTextDialog'
+import FormatPromptValuesDialog from '@/ui-component/dialog/FormatPromptValuesDialog'
+import InputHintDialog from '@/ui-component/dialog/InputHintDialog'
+import ManageScrapedLinksDialog from '@/ui-component/dialog/ManageScrapedLinksDialog'
+import NvidiaNIMDialog from '@/ui-component/dialog/NvidiaNIMDialog'
+import PromptLangsmithHubDialog from '@/ui-component/dialog/PromptLangsmithHubDialog'
+import { AsyncDropdown } from '@/ui-component/dropdown/AsyncDropdown'
 import { Dropdown } from '@/ui-component/dropdown/Dropdown'
 import { MultiDropdown } from '@/ui-component/dropdown/MultiDropdown'
-import { AsyncDropdown } from '@/ui-component/dropdown/AsyncDropdown'
-import { Input } from '@/ui-component/input/Input'
-import { DataGrid } from '@/ui-component/grid/DataGrid'
-import { File } from '@/ui-component/file/File'
-import { SwitchInput } from '@/ui-component/switch/Switch'
-import { flowContext } from '@/store/context/ReactFlowContext'
-import { isValidConnection } from '@/utils/genericHelper'
-import { JsonEditorInput } from '@/ui-component/json/JsonEditor'
-import { TooltipWithParser } from '@/ui-component/tooltip/TooltipWithParser'
 import { CodeEditor } from '@/ui-component/editor/CodeEditor'
+import { File } from '@/ui-component/file/File'
+import { DataGrid } from '@/ui-component/grid/DataGrid'
+import { Input } from '@/ui-component/input/Input'
+import { JsonEditorInput } from '@/ui-component/json/JsonEditor'
+import { SwitchInput } from '@/ui-component/switch/Switch'
+import { Tab } from '@/ui-component/tabs/Tab'
+import { TabPanel } from '@/ui-component/tabs/TabPanel'
+import { TabsList } from '@/ui-component/tabs/TabsList'
+import { TooltipWithParser } from '@/ui-component/tooltip/TooltipWithParser'
+import AssistantDialog from '@/views/assistants/openai/AssistantDialog'
 import ToolDialog from '@/views/tools/ToolDialog'
-import AssistantDialog from '@/views/assistants/AssistantDialog'
-import FormatPromptValuesDialog from '@/ui-component/dialog/FormatPromptValuesDialog'
-import ExpandTextDialog from '@/ui-component/dialog/ExpandTextDialog'
-import PromptLangsmithHubDialog from '@/ui-component/dialog/PromptLangsmithHubDialog'
-import ManageScrapedLinksDialog from '@/ui-component/dialog/ManageScrapedLinksDialog'
 import CredentialInputHandler from './CredentialInputHandler'
 
 // utils
-import { getInputVariables } from '@/utils/genericHelper'
+import { getAvailableNodesForVariable, getCustomConditionOutputs, getInputVariables, isValidConnection } from '@/utils/genericHelper'
 
 // const
 import { FLOWISE_CREDENTIAL_ID } from '@/store/constant'
@@ -45,13 +53,33 @@ const CustomWidthTooltip = styled(({ className, ...props }) => <Tooltip {...prop
     }
 })
 
+const StyledPopper = styled(Popper)({
+    boxShadow: '0px 8px 10px -5px rgb(0 0 0 / 20%), 0px 16px 24px 2px rgb(0 0 0 / 14%), 0px 6px 30px 5px rgb(0 0 0 / 12%)',
+    borderRadius: '10px',
+    [`& .${autocompleteClasses.listbox}`]: {
+        boxSizing: 'border-box',
+        '& ul': {
+            padding: 10,
+            margin: 10
+        }
+    }
+})
+
 // ===========================|| NodeInputHandler ||=========================== //
 
-const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isAdditionalParams = false }) => {
+const NodeInputHandler = ({
+    inputAnchor,
+    inputParam,
+    data,
+    disabled = false,
+    isAdditionalParams = false,
+    disablePadding = false,
+    onHideNodeInfoDialog
+}) => {
     const theme = useTheme()
     const customization = useSelector((state) => state.customization)
     const ref = useRef(null)
-    const { reactFlowInstance } = useContext(flowContext)
+    const { reactFlowInstance, deleteEdge } = useContext(flowContext)
     const updateNodeInternals = useUpdateNodeInternals()
     const [position, setPosition] = useState(0)
     const [showExpandDialog, setShowExpandDialog] = useState(false)
@@ -64,17 +92,45 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
     const [showPromptHubDialog, setShowPromptHubDialog] = useState(false)
     const [showManageScrapedLinksDialog, setShowManageScrapedLinksDialog] = useState(false)
     const [manageScrapedLinksDialogProps, setManageScrapedLinksDialogProps] = useState({})
+    const [showInputHintDialog, setShowInputHintDialog] = useState(false)
+    const [inputHintDialogProps, setInputHintDialogProps] = useState({})
+    const [showConditionDialog, setShowConditionDialog] = useState(false)
+    const [conditionDialogProps, setConditionDialogProps] = useState({})
+    const [isNvidiaNIMDialogOpen, setIsNvidiaNIMDialogOpen] = useState(false)
+    const [tabValue, setTabValue] = useState(0)
 
-    const onExpandDialogClicked = (value, inputParam) => {
+    const onInputHintDialogClicked = (hint) => {
+        const dialogProps = {
+            ...hint
+        }
+        setInputHintDialogProps(dialogProps)
+        setShowInputHintDialog(true)
+    }
+
+    const onExpandDialogClicked = (value, inputParam, languageType) => {
         const dialogProps = {
             value,
             inputParam,
             disabled,
+            languageType,
             confirmButtonName: 'Save',
             cancelButtonName: 'Cancel'
         }
         setExpandDialogProps(dialogProps)
         setShowExpandDialog(true)
+    }
+
+    const onConditionDialogClicked = (inputParam) => {
+        const dialogProps = {
+            data,
+            inputParam,
+            disabled,
+            confirmButtonName: 'Save',
+            cancelButtonName: 'Cancel'
+        }
+        setConditionDialogProps(dialogProps)
+        setShowConditionDialog(true)
+        onHideNodeInfoDialog(true)
     }
 
     const onShowPromptHubButtonClicked = () => {
@@ -109,33 +165,233 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
         data.inputs.selectedLinks = links
     }
 
+    const getJSONValue = (templateValue) => {
+        if (!templateValue) return ''
+        const obj = {}
+        const inputVariables = getInputVariables(templateValue)
+        for (const inputVariable of inputVariables) {
+            obj[inputVariable] = ''
+        }
+        if (Object.keys(obj).length) return JSON.stringify(obj)
+        return ''
+    }
+
+    const getDataGridColDef = (columns, inputParam) => {
+        const colDef = []
+        for (const column of columns) {
+            const stateNode = reactFlowInstance ? reactFlowInstance.getNodes().find((node) => node.data.name === 'seqState') : null
+            if (column.type === 'asyncSingleSelect' && column.loadMethod && column.loadMethod.includes('loadStateKeys')) {
+                if (stateNode) {
+                    const tabParam = stateNode.data.inputParams.find((param) => param.tabIdentifier)
+                    if (tabParam && tabParam.tabs.length > 0) {
+                        const selectedTabIdentifier = tabParam.tabIdentifier
+
+                        const selectedTab =
+                            stateNode.data.inputs[`${selectedTabIdentifier}_${stateNode.data.id}`] ||
+                            tabParam.default ||
+                            tabParam.tabs[0].name
+
+                        const datagridValues = stateNode.data.inputs[selectedTab]
+                        if (datagridValues) {
+                            try {
+                                const parsedDatagridValues = JSON.parse(datagridValues)
+                                const keys = Array.isArray(parsedDatagridValues)
+                                    ? parsedDatagridValues.map((item) => item.key)
+                                    : Object.keys(parsedDatagridValues)
+                                colDef.push({
+                                    ...column,
+                                    field: column.field,
+                                    headerName: column.headerName,
+                                    type: 'singleSelect',
+                                    editable: true,
+                                    valueOptions: keys
+                                })
+                            } catch (error) {
+                                console.error('Error parsing stateMemory', error)
+                            }
+                        }
+                    }
+                } else {
+                    colDef.push({
+                        ...column,
+                        field: column.field,
+                        headerName: column.headerName,
+                        type: 'singleSelect',
+                        editable: true,
+                        valueOptions: []
+                    })
+                }
+            } else if (column.type === 'freeSolo') {
+                const preLoadOptions = []
+                if (column.loadMethod && column.loadMethod.includes('getPreviousMessages')) {
+                    const nodes = getAvailableNodesForVariable(
+                        reactFlowInstance?.getNodes() || [],
+                        reactFlowInstance?.getEdges() || [],
+                        data.id,
+                        inputParam.id
+                    )
+                    for (const node of nodes) {
+                        preLoadOptions.push({
+                            value: `$${node.id}`,
+                            label: `Output from ${node.data.id}`
+                        })
+                    }
+                }
+                if (column.loadMethod && column.loadMethod.includes('loadStateKeys')) {
+                    if (stateNode) {
+                        const tabParam = stateNode.data.inputParams.find((param) => param.tabIdentifier)
+                        if (tabParam && tabParam.tabs.length > 0) {
+                            const selectedTabIdentifier = tabParam.tabIdentifier
+
+                            const selectedTab =
+                                stateNode.data.inputs[`${selectedTabIdentifier}_${stateNode.data.id}`] ||
+                                tabParam.default ||
+                                tabParam.tabs[0].name
+
+                            const datagridValues = stateNode.data.inputs[selectedTab]
+                            if (datagridValues) {
+                                try {
+                                    const parsedDatagridValues = JSON.parse(datagridValues)
+                                    const keys = Array.isArray(parsedDatagridValues)
+                                        ? parsedDatagridValues.map((item) => item.key)
+                                        : Object.keys(parsedDatagridValues)
+                                    for (const key of keys) {
+                                        preLoadOptions.push({
+                                            value: `$flow.state.${key}`,
+                                            label: `Value from ${key}`
+                                        })
+                                    }
+                                } catch (error) {
+                                    console.error('Error parsing stateMemory', error)
+                                }
+                            }
+                        }
+                    }
+                }
+                colDef.push({
+                    ...column,
+                    field: column.field,
+                    headerName: column.headerName,
+                    renderEditCell: ({ id, field, value }) => {
+                        // eslint-disable-next-line react-hooks/rules-of-hooks
+                        const apiRef = useGridApiContext()
+                        return (
+                            <Autocomplete
+                                id={column.field}
+                                freeSolo
+                                fullWidth
+                                options={[...preLoadOptions, ...column.valueOptions]}
+                                value={value}
+                                PopperComponent={StyledPopper}
+                                renderInput={(params) => <TextField {...params} />}
+                                renderOption={(props, option) => (
+                                    <li {...props}>
+                                        <div>
+                                            <strong>{option.value}</strong>
+                                            <br />
+                                            <small>{option.label}</small>
+                                        </div>
+                                    </li>
+                                )}
+                                getOptionLabel={(option) => {
+                                    return typeof option === 'string' ? option : option.value
+                                }}
+                                onInputChange={(event, newValue) => {
+                                    apiRef.current.setEditCellValue({ id, field, value: newValue })
+                                }}
+                                sx={{
+                                    '& .MuiInputBase-root': {
+                                        height: '50px' // Adjust this value as needed
+                                    },
+                                    '& .MuiOutlinedInput-root': {
+                                        border: 'none'
+                                    },
+                                    '& .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline': {
+                                        border: 'none'
+                                    }
+                                }}
+                            />
+                        )
+                    }
+                })
+            } else {
+                colDef.push(column)
+            }
+        }
+        return colDef
+    }
+
+    const getDropdownOptions = (inputParam) => {
+        const preLoadOptions = []
+        if (inputParam.loadPreviousNodes) {
+            const nodes = getAvailableNodesForVariable(
+                reactFlowInstance?.getNodes() || [],
+                reactFlowInstance?.getEdges() || [],
+                data.id,
+                inputParam.id
+            )
+            for (const node of nodes) {
+                preLoadOptions.push({
+                    name: `{{ ${node.data.id} }}`,
+                    label: `{{ ${node.data.id} }}`,
+                    description: `Output from ${node.data.id}`
+                })
+            }
+        }
+        return [...preLoadOptions, ...inputParam.options]
+    }
+
+    const getTabValue = (inputParam) => {
+        return inputParam.tabs.findIndex((item) => item.name === data.inputs[`${inputParam.tabIdentifier}_${data.id}`]) >= 0
+            ? inputParam.tabs.findIndex((item) => item.name === data.inputs[`${inputParam.tabIdentifier}_${data.id}`])
+            : tabValue
+    }
+
     const onEditJSONClicked = (value, inputParam) => {
         // Preset values if the field is format prompt values
         let inputValue = value
         if (inputParam.name === 'promptValues' && !value) {
-            const obj = {}
             const templateValue =
-                (data.inputs['template'] ?? '') + (data.inputs['systemMessagePrompt'] ?? '') + (data.inputs['humanMessagePrompt'] ?? '')
-            const inputVariables = getInputVariables(templateValue)
-            for (const inputVariable of inputVariables) {
-                obj[inputVariable] = ''
-            }
-            if (Object.keys(obj).length) inputValue = JSON.stringify(obj)
+                (data.inputs['template'] ?? '') +
+                (data.inputs['systemMessagePrompt'] ?? '') +
+                (data.inputs['humanMessagePrompt'] ?? '') +
+                (data.inputs['workerPrompt'] ?? '')
+            inputValue = getJSONValue(templateValue)
         }
         const dialogProp = {
             value: inputValue,
             inputParam,
-            nodes: reactFlowInstance.getNodes(),
-            edges: reactFlowInstance.getEdges(),
-            nodeId: data.id
+            nodes: reactFlowInstance?.getNodes() || [],
+            edges: reactFlowInstance?.getEdges() || [],
+            nodeId: data.id,
+            data
         }
         setFormatPromptValuesDialogProps(dialogProp)
         setShowFormatPromptValuesDialog(true)
     }
 
     const onExpandDialogSave = (newValue, inputParamName) => {
-        setShowExpandDialog(false)
         data.inputs[inputParamName] = newValue
+        setShowExpandDialog(false)
+    }
+
+    const onConditionDialogSave = (newData, inputParam, tabValue) => {
+        data.inputs[`${inputParam.tabIdentifier}_${data.id}`] = inputParam.tabs[tabValue].name
+
+        const existingEdges = reactFlowInstance?.getEdges().filter((edge) => edge.source === data.id) || []
+        const { outputAnchors, toBeRemovedEdgeIds } = getCustomConditionOutputs(
+            newData.inputs[inputParam.tabs[tabValue].name],
+            data.id,
+            existingEdges,
+            inputParam.tabs[tabValue].type === 'datagrid'
+        )
+        if (!outputAnchors) return
+        data.outputAnchors = outputAnchors
+        for (const edgeId of toBeRemovedEdgeIds) {
+            deleteEdge(edgeId)
+        }
+        setShowConditionDialog(false)
+        onHideNodeInfoDialog(false)
     }
 
     const editAsyncOption = (inputParamName, inputValue) => {
@@ -189,6 +445,13 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
         setAsyncOptionEditDialog('')
     }
 
+    const handleNvidiaNIMDialogComplete = (containerData) => {
+        if (containerData) {
+            data.inputs['basePath'] = containerData.baseUrl
+            data.inputs['modelName'] = containerData.image
+        }
+    }
+
     useEffect(() => {
         if (ref.current && ref.current.offsetTop && ref.current.clientHeight) {
             setPosition(ref.current.offsetTop + ref.current.clientHeight / 2)
@@ -231,7 +494,7 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
 
             {((inputParam && !inputParam.additionalParams) || isAdditionalParams) && (
                 <>
-                    {inputParam.acceptVariable && (
+                    {inputParam.acceptVariable && !isAdditionalParams && (
                         <CustomWidthTooltip placement='left' title={inputParam.type}>
                             <Handle
                                 type='target'
@@ -248,7 +511,7 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                             />
                         </CustomWidthTooltip>
                     )}
-                    <Box sx={{ p: 2 }}>
+                    <Box sx={{ p: disablePadding ? 0 : 2 }}>
                         {(data.name === 'promptTemplate' || data.name === 'chatPromptTemplate') &&
                             (inputParam.name === 'template' || inputParam.name === 'systemMessagePrompt') && (
                                 <>
@@ -274,6 +537,22 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                                     ></PromptLangsmithHubDialog>
                                 </>
                             )}
+                        {data.name === 'Chat NVIDIA NIM' && inputParam.name === 'modelName' && (
+                            <>
+                                <Button
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'row',
+                                        width: '100%'
+                                    }}
+                                    sx={{ borderRadius: '12px', width: '100%', mb: 2, mt: -1 }}
+                                    variant='outlined'
+                                    onClick={() => setIsNvidiaNIMDialogOpen(true)}
+                                >
+                                    Setup NIM Locally
+                                </Button>
+                            </>
+                        )}
                         <div style={{ display: 'flex', flexDirection: 'row' }}>
                             <Typography>
                                 {inputParam.label}
@@ -281,6 +560,33 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                                 {inputParam.description && <TooltipWithParser style={{ marginLeft: 10 }} title={inputParam.description} />}
                             </Typography>
                             <div style={{ flexGrow: 1 }}></div>
+                            {inputParam.hint && !isAdditionalParams && (
+                                <IconButton
+                                    size='small'
+                                    sx={{
+                                        height: 25,
+                                        width: 25
+                                    }}
+                                    title={inputParam.hint.label}
+                                    color='secondary'
+                                    onClick={() => onInputHintDialogClicked(inputParam.hint)}
+                                >
+                                    <IconBulb />
+                                </IconButton>
+                            )}
+                            {inputParam.hint && isAdditionalParams && (
+                                <Button
+                                    sx={{ p: 0, px: 2 }}
+                                    color='secondary'
+                                    variant='text'
+                                    onClick={() => {
+                                        onInputHintDialogClicked(inputParam.hint)
+                                    }}
+                                    startIcon={<IconBulb size={17} />}
+                                >
+                                    {inputParam.hint.label}
+                                </Button>
+                            )}
                             {((inputParam.type === 'string' && inputParam.rows) || inputParam.type === 'code') && (
                                 <IconButton
                                     size='small'
@@ -326,7 +632,37 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                                 }}
                             />
                         )}
-
+                        {inputParam.type === 'tabs' && (
+                            <>
+                                <Tabs
+                                    value={getTabValue(inputParam)}
+                                    onChange={(event, val) => {
+                                        setTabValue(val)
+                                        data.inputs[`${inputParam.tabIdentifier}_${data.id}`] = inputParam.tabs[val].name
+                                    }}
+                                    aria-label='tabs'
+                                    variant='fullWidth'
+                                    defaultValue={getTabValue(inputParam)}
+                                >
+                                    <TabsList>
+                                        {inputParam.tabs.map((inputChildParam, index) => (
+                                            <Tab key={index}>{inputChildParam.label}</Tab>
+                                        ))}
+                                    </TabsList>
+                                </Tabs>
+                                {inputParam.tabs.map((inputChildParam, index) => (
+                                    <TabPanel key={index} value={getTabValue(inputParam)} index={index}>
+                                        <NodeInputHandler
+                                            disabled={inputChildParam.disabled}
+                                            inputParam={inputChildParam}
+                                            data={data}
+                                            isAdditionalParams={true}
+                                            disablePadding={true}
+                                        />
+                                    </TabPanel>
+                                ))}
+                            </>
+                        )}
                         {inputParam.type === 'file' && (
                             <File
                                 disabled={disabled}
@@ -345,7 +681,7 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                         {inputParam.type === 'datagrid' && (
                             <DataGrid
                                 disabled={disabled}
-                                columns={inputParam.datagrid}
+                                columns={getDataGridColDef(inputParam.datagrid, inputParam)}
                                 hideFooter={true}
                                 rows={data.inputs[inputParam.name] ?? JSON.stringify(inputParam.default) ?? []}
                                 onChange={(newValue) => (data.inputs[inputParam.name] = newValue)}
@@ -353,8 +689,27 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                         )}
                         {inputParam.type === 'code' && (
                             <>
-                                <div style={{ height: '5px' }}></div>
-                                <div style={{ height: inputParam.rows ? '100px' : '200px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start' }}>
+                                    {inputParam.codeExample && (
+                                        <Button
+                                            variant='outlined'
+                                            onClick={() => {
+                                                data.inputs[inputParam.name] = inputParam.codeExample
+                                            }}
+                                        >
+                                            See Example
+                                        </Button>
+                                    )}
+                                </div>
+                                <div
+                                    style={{
+                                        marginTop: '10px',
+                                        border: '1px solid',
+                                        borderColor: theme.palette.grey['300'],
+                                        borderRadius: '6px',
+                                        height: inputParam.rows ? '100px' : '200px'
+                                    }}
+                                >
                                     <CodeEditor
                                         disabled={disabled}
                                         value={data.inputs[inputParam.name] ?? inputParam.default ?? ''}
@@ -386,7 +741,13 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                                     <JsonEditorInput
                                         disabled={disabled}
                                         onChange={(newValue) => (data.inputs[inputParam.name] = newValue)}
-                                        value={data.inputs[inputParam.name] ?? inputParam.default ?? ''}
+                                        value={
+                                            data.inputs[inputParam.name] ||
+                                            inputParam.default ||
+                                            getJSONValue(data.inputs['workerPrompt']) ||
+                                            ''
+                                        }
+                                        isSequentialAgent={data.category === 'Sequential Agents'}
                                         isDarkMode={customization.isDarkMode}
                                     />
                                 )}
@@ -419,7 +780,8 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                             <Dropdown
                                 disabled={disabled}
                                 name={inputParam.name}
-                                options={inputParam.options}
+                                options={getDropdownOptions(inputParam)}
+                                freeSolo={inputParam.freeSolo}
                                 onSelect={(newValue) => (data.inputs[inputParam.name] = newValue)}
                                 value={data.inputs[inputParam.name] ?? inputParam.default ?? 'choose an option'}
                             />
@@ -428,20 +790,22 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                             <MultiDropdown
                                 disabled={disabled}
                                 name={inputParam.name}
-                                options={inputParam.options}
+                                options={getDropdownOptions(inputParam)}
                                 onSelect={(newValue) => (data.inputs[inputParam.name] = newValue)}
                                 value={data.inputs[inputParam.name] ?? inputParam.default ?? 'choose an option'}
                             />
                         )}
-                        {inputParam.type === 'asyncOptions' && (
+                        {(inputParam.type === 'asyncOptions' || inputParam.type === 'asyncMultiOptions') && (
                             <>
                                 {data.inputParams.length === 1 && <div style={{ marginTop: 10 }} />}
-                                <div key={reloadTimestamp} style={{ display: 'flex', flexDirection: 'row' }}>
+                                <div key={reloadTimestamp} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 1 }}>
                                     <AsyncDropdown
                                         disabled={disabled}
                                         name={inputParam.name}
                                         nodeData={data}
                                         value={data.inputs[inputParam.name] ?? inputParam.default ?? 'choose an option'}
+                                        freeSolo={inputParam.freeSolo}
+                                        multiple={inputParam.type === 'asyncMultiOptions'}
                                         isCreateNewOption={EDITABLE_OPTIONS.includes(inputParam.name)}
                                         onSelect={(newValue) => (data.inputs[inputParam.name] = newValue)}
                                         onCreateNew={() => addAsyncOption(inputParam.name)}
@@ -456,7 +820,34 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                                             <IconEdit />
                                         </IconButton>
                                     )}
+                                    {inputParam.refresh && (
+                                        <IconButton
+                                            title='Refresh'
+                                            color='primary'
+                                            size='small'
+                                            onClick={() => setReloadTimestamp(Date.now().toString())}
+                                        >
+                                            <IconRefresh />
+                                        </IconButton>
+                                    )}
                                 </div>
+                            </>
+                        )}
+                        {/* CUSTOM INPUT LOGIC */}
+                        {inputParam.type.includes('conditionFunction') && (
+                            <>
+                                <Button
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'row',
+                                        width: '100%'
+                                    }}
+                                    sx={{ borderRadius: '12px', width: '100%', mt: 1 }}
+                                    variant='outlined'
+                                    onClick={() => onConditionDialogClicked(inputParam)}
+                                >
+                                    {inputParam.label}
+                                </Button>
                             </>
                         )}
                         {(data.name === 'cheerioWebScraper' ||
@@ -512,7 +903,27 @@ const NodeInputHandler = ({ inputAnchor, inputParam, data, disabled = false, isA
                 dialogProps={expandDialogProps}
                 onCancel={() => setShowExpandDialog(false)}
                 onConfirm={(newValue, inputParamName) => onExpandDialogSave(newValue, inputParamName)}
+                onInputHintDialogClicked={onInputHintDialogClicked}
             ></ExpandTextDialog>
+            <ConditionDialog
+                show={showConditionDialog}
+                dialogProps={conditionDialogProps}
+                onCancel={() => {
+                    setShowConditionDialog(false)
+                    onHideNodeInfoDialog(false)
+                }}
+                onConfirm={(newData, inputParam, tabValue) => onConditionDialogSave(newData, inputParam, tabValue)}
+            ></ConditionDialog>
+            <InputHintDialog
+                show={showInputHintDialog}
+                dialogProps={inputHintDialogProps}
+                onCancel={() => setShowInputHintDialog(false)}
+            ></InputHintDialog>
+            <NvidiaNIMDialog
+                open={isNvidiaNIMDialogOpen}
+                onClose={() => setIsNvidiaNIMDialogOpen(false)}
+                onComplete={handleNvidiaNIMDialogComplete}
+            ></NvidiaNIMDialog>
         </div>
     )
 }
@@ -522,7 +933,9 @@ NodeInputHandler.propTypes = {
     inputParam: PropTypes.object,
     data: PropTypes.object,
     disabled: PropTypes.bool,
-    isAdditionalParams: PropTypes.bool
+    isAdditionalParams: PropTypes.bool,
+    disablePadding: PropTypes.bool,
+    onHideNodeInfoDialog: PropTypes.func
 }
 
 export default NodeInputHandler

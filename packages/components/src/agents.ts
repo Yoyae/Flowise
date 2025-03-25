@@ -3,14 +3,15 @@ import { ChainValues } from '@langchain/core/utils/types'
 import { AgentStep, AgentAction } from '@langchain/core/agents'
 import { BaseMessage, FunctionMessage, AIMessage, isBaseMessage } from '@langchain/core/messages'
 import { ToolCall } from '@langchain/core/messages/tool'
-import { OutputParserException, BaseOutputParser } from '@langchain/core/output_parsers'
+import { OutputParserException, BaseOutputParser, BaseLLMOutputParser } from '@langchain/core/output_parsers'
 import { BaseLanguageModel } from '@langchain/core/language_models/base'
 import { CallbackManager, CallbackManagerForChainRun, Callbacks } from '@langchain/core/callbacks/manager'
 import { ToolInputParsingException, Tool, StructuredToolInterface } from '@langchain/core/tools'
-import { Runnable, RunnableSequence, RunnablePassthrough } from '@langchain/core/runnables'
+import { Runnable, RunnableSequence, RunnablePassthrough, type RunnableConfig } from '@langchain/core/runnables'
 import { Serializable } from '@langchain/core/load/serializable'
 import { renderTemplate } from '@langchain/core/prompts'
 import { ChatGeneration } from '@langchain/core/outputs'
+import { Document } from '@langchain/core/documents'
 import { BaseChain, SerializedLLMChain } from 'langchain/chains'
 import {
     CreateReactAgentParams,
@@ -23,17 +24,20 @@ import {
 } from 'langchain/agents'
 import { formatLogToString } from 'langchain/agents/format_scratchpad/log'
 import { IUsedTool } from './Interface'
+import { getErrorMessage } from './error'
 
 export const SOURCE_DOCUMENTS_PREFIX = '\n\n----FLOWISE_SOURCE_DOCUMENTS----\n\n'
-type AgentFinish = {
+export const ARTIFACTS_PREFIX = '\n\n----FLOWISE_ARTIFACTS----\n\n'
+
+export type AgentFinish = {
     returnValues: Record<string, any>
     log: string
 }
 type AgentExecutorOutput = ChainValues
-
 interface AgentExecutorIteratorInput {
     agentExecutor: AgentExecutor
     inputs: Record<string, string>
+    config?: RunnableConfig
     callbacks?: Callbacks
     tags?: string[]
     metadata?: Record<string, unknown>
@@ -48,6 +52,8 @@ export class AgentExecutorIterator extends Serializable implements AgentExecutor
     agentExecutor: AgentExecutor
 
     inputs: Record<string, string>
+
+    config?: RunnableConfig
 
     callbacks: Callbacks
 
@@ -93,6 +99,7 @@ export class AgentExecutorIterator extends Serializable implements AgentExecutor
         this.metadata = fields.metadata
         this.runName = fields.runName
         this.runManager = fields.runManager
+        this.config = fields.config
     }
 
     /**
@@ -274,6 +281,8 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
     */
     handleParsingErrors: boolean | string | ((e: OutputParserException | ToolInputParsingException) => string) = false
 
+    handleToolRuntimeErrors?: (e: Error) => string
+
     get inputKeys() {
         return this.agent.inputKeys
     }
@@ -338,20 +347,21 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
         return this.maxIterations === undefined || iterations < this.maxIterations
     }
 
-    async _call(inputs: ChainValues, runManager?: CallbackManagerForChainRun): Promise<AgentExecutorOutput> {
-        const toolsByName = Object.fromEntries(this.tools.map((t) => [t.name.toLowerCase(), t]))
+    async _call(inputs: ChainValues, runManager?: CallbackManagerForChainRun, config?: RunnableConfig): Promise<AgentExecutorOutput> {
+        const toolsByName = Object.fromEntries(this.tools.map((t) => [t.name?.toLowerCase(), t]))
 
         const steps: AgentStep[] = []
         let iterations = 0
         let sourceDocuments: Array<Document> = []
         const usedTools: IUsedTool[] = []
+        let artifacts: any[] = []
 
         const getOutput = async (finishStep: AgentFinish): Promise<AgentExecutorOutput> => {
             const { returnValues } = finishStep
             const additional = await this.agent.prepareForOutput(returnValues, steps)
             if (sourceDocuments.length) additional.sourceDocuments = flatten(sourceDocuments)
             if (usedTools.length) additional.usedTools = usedTools
-
+            if (artifacts.length) additional.artifacts = flatten(artifacts)
             if (this.returnIntermediateSteps) {
                 return { ...returnValues, intermediateSteps: steps, ...additional }
             }
@@ -362,7 +372,7 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
         while (this.shouldContinue(iterations)) {
             let output
             try {
-                output = await this.agent.plan(steps, inputs, runManager?.getChild())
+                output = await this.agent.plan(steps, inputs, runManager?.getChild(), config)
             } catch (e) {
                 if (e instanceof OutputParserException) {
                     let observation
@@ -423,15 +433,21 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                                 {
                                     sessionId: this.sessionId,
                                     chatId: this.chatId,
-                                    input: this.input
+                                    input: this.input,
+                                    state: inputs
                                 }
                             )
+                            let toolOutput = observation
+                            if (typeof toolOutput === 'string' && toolOutput.includes(SOURCE_DOCUMENTS_PREFIX)) {
+                                toolOutput = toolOutput.split(SOURCE_DOCUMENTS_PREFIX)[0]
+                            }
+                            if (typeof toolOutput === 'string' && toolOutput.includes(ARTIFACTS_PREFIX)) {
+                                toolOutput = toolOutput.split(ARTIFACTS_PREFIX)[0]
+                            }
                             usedTools.push({
                                 tool: tool.name,
                                 toolInput: action.toolInput as any,
-                                toolOutput: observation.includes(SOURCE_DOCUMENTS_PREFIX)
-                                    ? observation.split(SOURCE_DOCUMENTS_PREFIX)[0]
-                                    : observation
+                                toolOutput
                             })
                         } else {
                             observation = `${action.tool} is not a valid tool, try another one.`
@@ -448,16 +464,40 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                                 throw e
                             }
                             observation = await new ExceptionTool().call(observation, runManager?.getChild())
+                            usedTools.push({
+                                tool: tool.name,
+                                toolInput: action.toolInput as any,
+                                toolOutput: '',
+                                error: getErrorMessage(e)
+                            })
                             return { action, observation: observation ?? '' }
+                        } else {
+                            usedTools.push({
+                                tool: tool.name,
+                                toolInput: action.toolInput as any,
+                                toolOutput: '',
+                                error: getErrorMessage(e)
+                            })
+                            return { action, observation: getErrorMessage(e) }
                         }
                     }
-                    if (observation?.includes(SOURCE_DOCUMENTS_PREFIX)) {
+                    if (typeof observation === 'string' && observation.includes(SOURCE_DOCUMENTS_PREFIX)) {
                         const observationArray = observation.split(SOURCE_DOCUMENTS_PREFIX)
                         observation = observationArray[0]
                         const docs = observationArray[1]
                         try {
                             const parsedDocs = JSON.parse(docs)
                             sourceDocuments.push(parsedDocs)
+                        } catch (e) {
+                            console.error('Error parsing source documents from tool')
+                        }
+                    }
+                    if (typeof observation === 'string' && observation.includes(ARTIFACTS_PREFIX)) {
+                        const observationArray = observation.split(ARTIFACTS_PREFIX)
+                        observation = observationArray[0]
+                        try {
+                            const artifact = JSON.parse(observationArray[1])
+                            artifacts.push(artifact)
                         } catch (e) {
                             console.error('Error parsing source documents from tool')
                         }
@@ -490,11 +530,12 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
         nameToolMap: Record<string, Tool>,
         inputs: ChainValues,
         intermediateSteps: AgentStep[],
-        runManager?: CallbackManagerForChainRun
+        runManager?: CallbackManagerForChainRun,
+        config?: RunnableConfig
     ): Promise<AgentFinish | AgentStep[]> {
         let output
         try {
-            output = await this.agent.plan(intermediateSteps, inputs, runManager?.getChild())
+            output = await this.agent.plan(intermediateSteps, inputs, runManager?.getChild(), config)
         } catch (e) {
             if (e instanceof OutputParserException) {
                 let observation
@@ -557,11 +598,16 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                         {
                             sessionId: this.sessionId,
                             chatId: this.chatId,
-                            input: this.input
+                            input: this.input,
+                            state: inputs
                         }
                     )
-                    if (observation?.includes(SOURCE_DOCUMENTS_PREFIX)) {
+                    if (typeof observation === 'string' && observation.includes(SOURCE_DOCUMENTS_PREFIX)) {
                         const observationArray = observation.split(SOURCE_DOCUMENTS_PREFIX)
+                        observation = observationArray[0]
+                    }
+                    if (typeof observation === 'string' && observation.includes(ARTIFACTS_PREFIX)) {
+                        const observationArray = observation.split(ARTIFACTS_PREFIX)
                         observation = observationArray[0]
                     }
                 } catch (e) {
@@ -606,7 +652,7 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
 
     async _getToolReturn(nextStepOutput: AgentStep): Promise<AgentFinish | null> {
         const { action, observation } = nextStepOutput
-        const nameToolMap = Object.fromEntries(this.tools.map((t) => [t.name.toLowerCase(), t]))
+        const nameToolMap = Object.fromEntries(this.tools.map((t) => [t.name?.toLowerCase(), t]))
         const [returnValueKey = 'output'] = this.agent.returnValues
         // Invalid tools won't be in the map, so we return False.
         if (action.tool in nameToolMap) {
@@ -632,10 +678,11 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
         throw new Error(`Got unsupported early_stopping_method: ${earlyStoppingMethod}`)
     }
 
-    async *_streamIterator(inputs: Record<string, any>): AsyncGenerator<ChainValues> {
+    async *_streamIterator(inputs: Record<string, any>, options?: Partial<RunnableConfig>): AsyncGenerator<ChainValues> {
         const agentExecutorIterator = new AgentExecutorIterator({
             inputs,
             agentExecutor: this,
+            config: options,
             metadata: this.metadata,
             tags: this.tags,
             callbacks: this.callbacks
@@ -829,7 +876,7 @@ export class XMLAgentOutputParser extends AgentActionOutputParser {
 
 abstract class AgentMultiActionOutputParser extends BaseOutputParser<AgentAction[] | AgentFinish> {}
 
-type ToolsAgentAction = AgentAction & {
+export type ToolsAgentAction = AgentAction & {
     toolCallId: string
     messageLog?: BaseMessage[]
 }
@@ -896,5 +943,108 @@ export class ToolCallingAgentOutputParser extends AgentMultiActionOutputParser {
 
     getFormatInstructions(): string {
         throw new Error('getFormatInstructions not implemented inside ToolCallingAgentOutputParser.')
+    }
+}
+
+export type ParsedToolCall = {
+    id?: string
+
+    type: string
+
+    args: Record<string, any>
+
+    /** @deprecated Use `type` instead. Will be removed in 0.2.0. */
+    name: string
+
+    /** @deprecated Use `args` instead. Will be removed in 0.2.0. */
+    arguments: Record<string, any>
+}
+
+export type JsonOutputToolsParserParams = {
+    /** Whether to return the tool call id. */
+    returnId?: boolean
+}
+
+export class JsonOutputToolsParser extends BaseLLMOutputParser<ParsedToolCall[]> {
+    static lc_name() {
+        return 'JsonOutputToolsParser'
+    }
+
+    returnId = false
+
+    lc_namespace = ['langchain', 'output_parsers', 'openai_tools']
+
+    lc_serializable = true
+
+    constructor(fields?: JsonOutputToolsParserParams) {
+        super(fields)
+        this.returnId = fields?.returnId ?? this.returnId
+    }
+
+    /**
+     * Parses the output and returns a JSON object. If `argsOnly` is true,
+     * only the arguments of the function call are returned.
+     * @param generations The output of the LLM to parse.
+     * @returns A JSON object representation of the function call or its arguments.
+     */
+    async parseResult(generations: ChatGeneration[]): Promise<ParsedToolCall[]> {
+        const toolCalls = generations[0].message.additional_kwargs.tool_calls
+        const parsedToolCalls = []
+
+        if (!toolCalls) {
+            // @ts-expect-error name and arguemnts are defined by Object.defineProperty
+            const parsedToolCall: ParsedToolCall = {
+                type: 'undefined',
+                args: {}
+            }
+
+            // backward-compatibility with previous
+            // versions of Langchain JS, which uses `name` and `arguments`
+            Object.defineProperty(parsedToolCall, 'name', {
+                get() {
+                    return this.type
+                }
+            })
+
+            Object.defineProperty(parsedToolCall, 'arguments', {
+                get() {
+                    return this.args
+                }
+            })
+
+            parsedToolCalls.push(parsedToolCall)
+        }
+
+        const clonedToolCalls = JSON.parse(JSON.stringify(toolCalls))
+        for (const toolCall of clonedToolCalls) {
+            if (toolCall.function !== undefined) {
+                // @ts-expect-error name and arguemnts are defined by Object.defineProperty
+                const parsedToolCall: ParsedToolCall = {
+                    type: toolCall.function.name,
+                    args: JSON.parse(toolCall.function.arguments)
+                }
+
+                if (this.returnId) {
+                    parsedToolCall.id = toolCall.id
+                }
+
+                // backward-compatibility with previous
+                // versions of Langchain JS, which uses `name` and `arguments`
+                Object.defineProperty(parsedToolCall, 'name', {
+                    get() {
+                        return this.type
+                    }
+                })
+
+                Object.defineProperty(parsedToolCall, 'arguments', {
+                    get() {
+                        return this.args
+                    }
+                })
+
+                parsedToolCalls.push(parsedToolCall)
+            }
+        }
+        return parsedToolCalls
     }
 }

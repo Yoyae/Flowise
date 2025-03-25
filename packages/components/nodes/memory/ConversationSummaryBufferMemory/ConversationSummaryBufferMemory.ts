@@ -10,9 +10,10 @@ import {
 } from '../../../src/Interface'
 import { getBaseClasses, mapChatMessageToBaseMessage } from '../../../src/utils'
 import { BaseLanguageModel } from '@langchain/core/language_models/base'
-import { BaseMessage, getBufferString } from '@langchain/core/messages'
+import { BaseMessage, getBufferString, HumanMessage } from '@langchain/core/messages'
 import { ConversationSummaryBufferMemory, ConversationSummaryBufferMemoryInput } from 'langchain/memory'
 import { DataSource } from 'typeorm'
+import { ChatAnthropic } from '../../chatmodels/ChatAnthropic/FlowiseChatAnthropic'
 
 class ConversationSummaryBufferMemory_Memory implements INode {
     label: string
@@ -114,7 +115,11 @@ class ConversationSummaryBufferMemoryExtended extends FlowiseSummaryBufferMemory
         this.chatflowid = fields.chatflowid
     }
 
-    async getChatMessages(overrideSessionId = '', returnBaseMessages = false): Promise<IMessage[] | BaseMessage[]> {
+    async getChatMessages(
+        overrideSessionId = '',
+        returnBaseMessages = false,
+        prependMessages?: IMessage[]
+    ): Promise<IMessage[] | BaseMessage[]> {
         const id = overrideSessionId ? overrideSessionId : this.sessionId
         if (!id) return []
 
@@ -128,7 +133,11 @@ class ConversationSummaryBufferMemoryExtended extends FlowiseSummaryBufferMemory
             }
         })
 
-        let baseMessages = mapChatMessageToBaseMessage(chatMessage)
+        if (prependMessages?.length) {
+            chatMessage.unshift(...prependMessages)
+        }
+
+        let baseMessages = await mapChatMessageToBaseMessage(chatMessage)
 
         // Prune baseMessages if it exceeds max token limit
         if (this.movingSummaryBuffer) {
@@ -155,7 +164,12 @@ class ConversationSummaryBufferMemoryExtended extends FlowiseSummaryBufferMemory
         // ----------- Finished Pruning ---------------
 
         if (this.movingSummaryBuffer) {
-            baseMessages = [new this.summaryChatMessageClass(this.movingSummaryBuffer), ...baseMessages]
+            // Anthropic doesn't support multiple system messages
+            if (this.llm instanceof ChatAnthropic) {
+                baseMessages = [new HumanMessage(`Below is the summarized conversation:\n\n${this.movingSummaryBuffer}`), ...baseMessages]
+            } else {
+                baseMessages = [new this.summaryChatMessageClass(this.movingSummaryBuffer), ...baseMessages]
+            }
         }
 
         if (returnBaseMessages) {

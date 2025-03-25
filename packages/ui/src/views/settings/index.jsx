@@ -14,10 +14,12 @@ import PerfectScrollbar from 'react-perfect-scrollbar'
 import MainCard from '@/ui-component/cards/MainCard'
 import Transitions from '@/ui-component/extended/Transitions'
 import settings from '@/menu-items/settings'
+import agentsettings from '@/menu-items/agentsettings'
+import customAssistantSettings from '@/menu-items/customassistant'
 
 // ==============================|| SETTINGS ||============================== //
 
-const Settings = ({ chatflow, isSettingsOpen, anchorEl, onSettingsItemClick, onUploadFile, onClose }) => {
+const Settings = ({ chatflow, isSettingsOpen, isCustomAssistant, anchorEl, isAgentCanvas, onSettingsItemClick, onUploadFile, onClose }) => {
     const theme = useTheme()
     const [settingsMenu, setSettingsMenu] = useState([])
     const customization = useSelector((state) => state.customization)
@@ -42,13 +44,19 @@ const Settings = ({ chatflow, isSettingsOpen, anchorEl, onSettingsItemClick, onU
 
     useEffect(() => {
         if (chatflow && !chatflow.id) {
-            const settingsMenu = settings.children.filter((menu) => menu.id === 'loadChatflow')
+            const menus = isAgentCanvas ? agentsettings : settings
+            const settingsMenu = menus.children.filter((menu) => menu.id === 'loadChatflow')
             setSettingsMenu(settingsMenu)
         } else if (chatflow && chatflow.id) {
-            const settingsMenu = settings.children
-            setSettingsMenu(settingsMenu)
+            if (isCustomAssistant) {
+                const menus = customAssistantSettings
+                setSettingsMenu(menus.children)
+            } else {
+                const menus = isAgentCanvas ? agentsettings : settings
+                setSettingsMenu(menus.children)
+            }
         }
-    }, [chatflow])
+    }, [chatflow, isAgentCanvas, isCustomAssistant])
 
     useEffect(() => {
         setOpen(isSettingsOpen)
@@ -144,10 +152,12 @@ const Settings = ({ chatflow, isSettingsOpen, anchorEl, onSettingsItemClick, onU
 Settings.propTypes = {
     chatflow: PropTypes.object,
     isSettingsOpen: PropTypes.bool,
+    isCustomAssistant: PropTypes.bool,
     anchorEl: PropTypes.any,
     onSettingsItemClick: PropTypes.func,
     onUploadFile: PropTypes.func,
-    onClose: PropTypes.func
+    onClose: PropTypes.func,
+    isAgentCanvas: PropTypes.bool
 }
 
 export default Settings

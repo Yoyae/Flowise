@@ -2,7 +2,9 @@ import {
     BaseNode,
     Document,
     Metadata,
-    VectorStore,
+    IEmbedModel,
+    VectorStoreBase,
+    VectorStoreNoEmbedModel,
     VectorStoreQuery,
     VectorStoreQueryResult,
     serviceContextFromDefaults,
@@ -123,7 +125,8 @@ class PineconeLlamaIndex_VectorStores implements INode {
             const pcvs = new PineconeVectorStore({
                 indexName,
                 apiKey: pineconeApiKey,
-                namespace: pineconeNamespace
+                namespace: pineconeNamespace,
+                embedModel: embeddings
             })
 
             const flattenDocs = docs && docs.length ? flatten(docs) : []
@@ -165,7 +168,8 @@ class PineconeLlamaIndex_VectorStores implements INode {
 
         const obj: PineconeParams = {
             indexName,
-            apiKey: pineconeApiKey
+            apiKey: pineconeApiKey,
+            embedModel: embeddings
         }
 
         if (pineconeNamespace) obj.namespace = pineconeNamespace
@@ -211,9 +215,9 @@ type PineconeParams = {
     namespace?: string
     chunkSize?: number
     queryFilter?: object
-}
+} & IEmbedModel
 
-class PineconeVectorStore implements VectorStore {
+class PineconeVectorStore extends VectorStoreBase implements VectorStoreNoEmbedModel {
     storesText: boolean = true
     db?: Pinecone
     indexName: string
@@ -223,6 +227,7 @@ class PineconeVectorStore implements VectorStore {
     queryFilter?: object
 
     constructor(params: PineconeParams) {
+        super(params?.embedModel)
         this.indexName = params?.indexName
         this.apiKey = params?.apiKey
         this.namespace = params?.namespace ?? ''
@@ -290,8 +295,11 @@ class PineconeVectorStore implements VectorStore {
     async query(query: VectorStoreQuery): Promise<VectorStoreQueryResult> {
         const queryOptions: any = {
             vector: query.queryEmbedding,
-            topK: query.similarityTopK,
-            filter: this.queryFilter
+            topK: query.similarityTopK
+        }
+
+        if (this.queryFilter && Object.keys(this.queryFilter).length > 0) {
+            queryOptions.filter = this.queryFilter
         }
 
         const idx = await this.index()

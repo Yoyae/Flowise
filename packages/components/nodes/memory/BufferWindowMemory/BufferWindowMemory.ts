@@ -105,7 +105,11 @@ class BufferWindowMemoryExtended extends FlowiseWindowMemory implements MemoryMe
         this.chatflowid = fields.chatflowid
     }
 
-    async getChatMessages(overrideSessionId = '', returnBaseMessages = false): Promise<IMessage[] | BaseMessage[]> {
+    async getChatMessages(
+        overrideSessionId = '',
+        returnBaseMessages = false,
+        prependMessages?: IMessage[]
+    ): Promise<IMessage[] | BaseMessage[]> {
         const id = overrideSessionId ? overrideSessionId : this.sessionId
         if (!id) return []
 
@@ -114,17 +118,23 @@ class BufferWindowMemoryExtended extends FlowiseWindowMemory implements MemoryMe
                 sessionId: id,
                 chatflowid: this.chatflowid
             },
-            take: this.k + 1,
             order: {
-                createdDate: 'DESC' // we get the latest top K
+                createdDate: 'ASC'
             }
         })
 
-        // reverse the order of human and ai messages
-        if (chatMessage.length) chatMessage.reverse()
+        if (this.k <= 0) {
+            chatMessage = []
+        } else {
+            chatMessage = chatMessage.slice(-this.k * 2)
+        }
+
+        if (prependMessages?.length) {
+            chatMessage.unshift(...prependMessages)
+        }
 
         if (returnBaseMessages) {
-            return mapChatMessageToBaseMessage(chatMessage)
+            return await mapChatMessageToBaseMessage(chatMessage)
         }
 
         let returnIMessages: IMessage[] = []

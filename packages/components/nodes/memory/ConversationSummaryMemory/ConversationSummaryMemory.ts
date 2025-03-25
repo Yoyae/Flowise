@@ -10,9 +10,10 @@ import {
 } from '../../../src/Interface'
 import { getBaseClasses, mapChatMessageToBaseMessage } from '../../../src/utils'
 import { BaseLanguageModel } from '@langchain/core/language_models/base'
-import { BaseMessage, SystemMessage } from '@langchain/core/messages'
+import { BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages'
 import { ConversationSummaryMemory, ConversationSummaryMemoryInput } from 'langchain/memory'
 import { DataSource } from 'typeorm'
+import { ChatAnthropic } from '../../chatmodels/ChatAnthropic/FlowiseChatAnthropic'
 
 class ConversationSummaryMemory_Memory implements INode {
     label: string
@@ -104,7 +105,11 @@ class ConversationSummaryMemoryExtended extends FlowiseSummaryMemory implements 
         this.chatflowid = fields.chatflowid
     }
 
-    async getChatMessages(overrideSessionId = '', returnBaseMessages = false): Promise<IMessage[] | BaseMessage[]> {
+    async getChatMessages(
+        overrideSessionId = '',
+        returnBaseMessages = false,
+        prependMessages?: IMessage[]
+    ): Promise<IMessage[] | BaseMessage[]> {
         const id = overrideSessionId ? overrideSessionId : this.sessionId
         if (!id) return []
 
@@ -119,7 +124,11 @@ class ConversationSummaryMemoryExtended extends FlowiseSummaryMemory implements 
             }
         })
 
-        const baseMessages = mapChatMessageToBaseMessage(chatMessage)
+        if (prependMessages?.length) {
+            chatMessage.unshift(...prependMessages)
+        }
+
+        const baseMessages = await mapChatMessageToBaseMessage(chatMessage)
 
         // Get summary
         if (this.llm && typeof this.llm !== 'string') {
@@ -127,7 +136,12 @@ class ConversationSummaryMemoryExtended extends FlowiseSummaryMemory implements 
         }
 
         if (returnBaseMessages) {
-            return [new SystemMessage(this.buffer)]
+            // Anthropic doesn't support multiple system messages
+            if (this.llm instanceof ChatAnthropic) {
+                return [new HumanMessage(`Below is the summarized conversation:\n\n${this.buffer}`)]
+            } else {
+                return [new SystemMessage(this.buffer)]
+            }
         }
 
         if (this.buffer) {

@@ -1,29 +1,16 @@
-import { Redis, RedisConfigNodejs } from '@upstash/redis'
-import { isEqual } from 'lodash'
+import { Redis } from '@upstash/redis'
 import { BufferMemory, BufferMemoryInput } from 'langchain/memory'
 import { UpstashRedisChatMessageHistory } from '@langchain/community/stores/message/upstash_redis'
 import { mapStoredMessageToChatMessage, AIMessage, HumanMessage, StoredMessage, BaseMessage } from '@langchain/core/messages'
 import { FlowiseMemory, IMessage, INode, INodeData, INodeParams, MemoryMethods, MessageType } from '../../../src/Interface'
-import { convertBaseMessagetoIMessage, getBaseClasses, getCredentialData, getCredentialParam } from '../../../src/utils'
+import {
+    convertBaseMessagetoIMessage,
+    getBaseClasses,
+    getCredentialData,
+    getCredentialParam,
+    mapChatMessageToBaseMessage
+} from '../../../src/utils'
 import { ICommonObject } from '../../../src/Interface'
-
-let redisClientSingleton: Redis
-let redisClientOption: RedisConfigNodejs
-
-const getRedisClientbyOption = (option: RedisConfigNodejs) => {
-    if (!redisClientSingleton) {
-        // if client doesn't exists
-        redisClientSingleton = new Redis(option)
-        redisClientOption = option
-        return redisClientSingleton
-    } else if (redisClientSingleton && !isEqual(option, redisClientOption)) {
-        // if client exists but option changed
-        redisClientSingleton = new Redis(option)
-        redisClientOption = option
-        return redisClientSingleton
-    }
-    return redisClientSingleton
-}
 
 class UpstashRedisBackedChatMemory_Memory implements INode {
     label: string
@@ -74,7 +61,7 @@ class UpstashRedisBackedChatMemory_Memory implements INode {
                 label: 'Session Timeouts',
                 name: 'sessionTTL',
                 type: 'number',
-                description: 'Omit this parameter to make sessions never expire',
+                description: 'Seconds till a session expires. If not specified, the session will never expire.',
                 additionalParams: true,
                 optional: true
             },
@@ -103,7 +90,7 @@ const initalizeUpstashRedis = async (nodeData: INodeData, options: ICommonObject
     const credentialData = await getCredentialData(nodeData.credential ?? '', options)
     const upstashRestToken = getCredentialParam('upstashRestToken', credentialData, nodeData)
 
-    const client = getRedisClientbyOption({
+    const client = new Redis({
         url: baseURL,
         token: upstashRestToken
     })
@@ -143,7 +130,11 @@ class BufferMemoryExtended extends FlowiseMemory implements MemoryMethods {
         this.sessionTTL = fields.sessionTTL
     }
 
-    async getChatMessages(overrideSessionId = '', returnBaseMessages = false): Promise<IMessage[] | BaseMessage[]> {
+    async getChatMessages(
+        overrideSessionId = '',
+        returnBaseMessages = false,
+        prependMessages?: IMessage[]
+    ): Promise<IMessage[] | BaseMessage[]> {
         if (!this.redisClient) return []
 
         const id = overrideSessionId ? overrideSessionId : this.sessionId
@@ -151,6 +142,9 @@ class BufferMemoryExtended extends FlowiseMemory implements MemoryMethods {
         const orderedMessages = rawStoredMessages.reverse()
         const previousMessages = orderedMessages.filter((x): x is StoredMessage => x.type !== undefined && x.data.content !== undefined)
         const baseMessages = previousMessages.map(mapStoredMessageToChatMessage)
+        if (prependMessages?.length) {
+            baseMessages.unshift(...(await mapChatMessageToBaseMessage(prependMessages)))
+        }
         return returnBaseMessages ? baseMessages : convertBaseMessagetoIMessage(baseMessages)
     }
 

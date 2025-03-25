@@ -58,7 +58,8 @@ const Chatflows = () => {
     function filterFlows(data) {
         return (
             data.name.toLowerCase().indexOf(search.toLowerCase()) > -1 ||
-            (data.category && data.category.toLowerCase().indexOf(search.toLowerCase()) > -1)
+            (data.category && data.category.toLowerCase().indexOf(search.toLowerCase()) > -1) ||
+            data.id.toLowerCase().indexOf(search.toLowerCase()) > -1
         )
     }
 
@@ -197,7 +198,7 @@ const Chatflows = () => {
                         <Stack sx={{ alignItems: 'center', justifyContent: 'center' }} flexDirection='column'>
                             <Box sx={{ p: 2, height: 'auto' }}>
                                 <img
-                                    style={{ objectFit: 'cover', height: '16vh', width: 'auto' }}
+                                    style={{ objectFit: 'cover', height: '25vh', width: 'auto' }}
                                     src={WorkflowEmptySVG}
                                     alt='WorkflowEmptySVG'
                                 />
