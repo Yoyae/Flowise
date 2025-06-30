@@ -1,4 +1,4 @@
-import { flatten, uniq } from 'lodash'
+import { difference, flatten, uniq } from 'lodash'
 import { DataSource } from 'typeorm'
 import { z } from 'zod'
 import { RunnableSequence, RunnablePassthrough, RunnableConfig } from '@langchain/core/runnables'
@@ -27,7 +27,6 @@ import {
     transformBracesWithColon
 } from '../../../src/utils'
 import {
-    ExtractTool,
     convertStructuredSchemaToZod,
     customGet,
     getVM,
@@ -37,7 +36,6 @@ import {
     restructureMessages,
     checkMessageHistory
 } from '../commonUtils'
-import { ChatGoogleGenerativeAI } from '../../chatmodels/ChatGoogleGenerativeAI/FlowiseChatGoogleGenerativeAI'
 
 const TAB_IDENTIFIER = 'selectedUpdateStateMemoryTab'
 const customOutputFuncDesc = `This is only applicable when you have a custom State at the START node. After agent execution, you might want to update the State values`
@@ -430,8 +428,15 @@ class LLMNode_SeqAgents implements INode {
         const abortControllerSignal = options.signal as AbortController
         const llmNodeInputVariables = uniq([...getInputVariables(systemPrompt), ...getInputVariables(humanPrompt)])
 
-        if (!llmNodeInputVariables.every((element) => Object.keys(llmNodeInputVariablesValues).includes(element))) {
-            throw new Error('LLM Node input variables values are not provided!')
+        const missingInputVars = difference(llmNodeInputVariables, Object.keys(llmNodeInputVariablesValues)).join(' ')
+        const allVariablesSatisfied = missingInputVars.length === 0
+        if (!allVariablesSatisfied) {
+            const nodeInputVars = llmNodeInputVariables.join(' ')
+            const providedInputVars = Object.keys(llmNodeInputVariablesValues).join(' ')
+
+            throw new Error(
+                `LLM Node input variables values are not provided! Required: ${nodeInputVars}, Provided: ${providedInputVars}. Missing: ${missingInputVars}`
+            )
         }
 
         const workerNode = async (state: ISeqAgentsState, config: RunnableConfig) => {
@@ -506,19 +511,8 @@ async function createAgent(
         try {
             const structuredOutput = z.object(convertStructuredSchemaToZod(llmStructuredOutput))
 
-            if (llm instanceof ChatGoogleGenerativeAI) {
-                const tool = new ExtractTool({
-                    schema: structuredOutput
-                })
-                // @ts-ignore
-                const modelWithTool = llm.bind({
-                    tools: [tool]
-                }) as any
-                llm = modelWithTool
-            } else {
-                // @ts-ignore
-                llm = llm.withStructuredOutput(structuredOutput)
-            }
+            // @ts-ignore
+            llm = llm.withStructuredOutput(structuredOutput)
         } catch (exception) {
             console.error(exception)
         }
@@ -661,7 +655,7 @@ const getReturnOutput = async (nodeData: INodeData, input: string, options: ICom
     const updateStateMemory = nodeData.inputs?.updateStateMemory as string
 
     const selectedTab = tabIdentifier ? tabIdentifier.split(`_${nodeData.id}`)[0] : 'updateStateMemoryUI'
-    const variables = await getVars(appDataSource, databaseEntities, nodeData)
+    const variables = await getVars(appDataSource, databaseEntities, nodeData, options)
 
     const flow = {
         chatflowId: options.chatflowid,
@@ -714,7 +708,7 @@ const getReturnOutput = async (nodeData: INodeData, input: string, options: ICom
             throw new Error(e)
         }
     } else if (selectedTab === 'updateStateMemoryCode' && updateStateMemoryCode) {
-        const vm = await getVM(appDataSource, databaseEntities, nodeData, flow)
+        const vm = await getVM(appDataSource, databaseEntities, nodeData, options, flow)
         try {
             const response = await vm.run(`module.exports = async function() {${updateStateMemoryCode}}()`, __dirname)
             if (typeof response !== 'object') throw new Error('Return output must be an object')
